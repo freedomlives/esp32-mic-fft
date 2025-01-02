@@ -9,6 +9,10 @@
 
   
 */
+
+// This code words perfectly fine with the ESP32-S3 dev board as well, only pins need to be changed lower down
+// Changes have been made so it will work with the latest version of all of the libraries used (as of January 2025)
+#include <Arduino.h> // Needed if using PlatformIO
 #include <WiFi.h>
 #include <WebServer.h>
 #include <WebSocketsServer.h>
@@ -29,13 +33,18 @@ int32_t samples[BLOCK_SIZE];
 
 String labels[] = {"125", "250", "500", "1K", "2K", "4K", "8K", "16K"};
 
-arduinoFFT FFT = arduinoFFT(); /* Create FFT object */
+ArduinoFFT<double> FFT = ArduinoFFT<double>(vReal, vImag, BLOCK_SIZE, samplingFrequency); /* Create FFT object */
 
 // Connecting to the Internet
 const char * ssid = "yourssid";
 const char * password = "yourpassw0rd";
 
 int bands[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+
+//Maybe this doesn't matter in Arduino IDE, but in PlatformIO wasn't happy without declaring the functions before their first use
+void getData();
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length);
+
 
 // Running a web server
 WebServer server(80);
@@ -52,7 +61,7 @@ char webpage[] PROGMEM = R"=====(
   <script src='https://cdnjs.cloudflare.com/ajax/libs/Chart.js/2.5.0/Chart.min.js'></script>
 </head>
 <body onload="javascript:init()">
-<h2>Browser Based ESP32-EYE Spectrum Analyzer</h2>
+<h2>Browser Based ESP32 Spectrum Analyzer</h2>
 <div>
   <canvas id="chart" width="600" height="400"></canvas>
 </div>
@@ -145,17 +154,18 @@ void setupMic() {
       .sample_rate = samplingFrequency,                        
       .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT, // could only get it to work with 32bits
       .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT, // although the SEL config should be left, it seems to transmit on right
-      .communication_format = i2s_comm_format_t(I2S_COMM_FORMAT_I2S | I2S_COMM_FORMAT_I2S_MSB),
+      .communication_format = I2S_COMM_FORMAT_STAND_I2S,
       .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,     // Interrupt level 1
       .dma_buf_count = 4,                           // number of buffers
       .dma_buf_len = BLOCK_SIZE                     // samples per buffer
   };
 
   // The pin config as per the setup
+  // These may need to be changed if using a different Dev board
     i2s_pin_config_t pin_config = {
         .bck_io_num = 26,  // IIS_SCLK
         .ws_io_num = 32,   // IIS_LCLK
-        .data_out_num = -1,// IIS_DSIN
+        .data_out_num = I2S_PIN_NO_CHANGE, // IIS_DSIN
         .data_in_num = 33  // IIS_DOUT
     };
 
@@ -211,19 +221,17 @@ void loop() {
 
   // Read multiple samples at once and calculate the sound pressure
 
-  int num_bytes_read = i2s_read_bytes(I2S_PORT, 
-                                      (char *)samples, 
-                                      BLOCK_SIZE,     // the doc says bytes, but its elements.
-                                      portMAX_DELAY); // no timeout
+  unsigned int num_bytes_read = 0;
+  i2s_read(I2S_PORT, (char *)samples, BLOCK_SIZE, &num_bytes_read, portMAX_DELAY); // no timeout
 
   for (uint16_t i = 0; i < BLOCK_SIZE; i++) {
     vReal[i] = samples[i] << 8;
     vImag[i] = 0.0; //Imaginary part must be zeroed in case of looping to avoid wrong calculations and overflows
   }
 
-  FFT.Windowing(vReal, BLOCK_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
-  FFT.Compute(vReal, vImag, BLOCK_SIZE, FFT_FORWARD);
-  FFT.ComplexToMagnitude(vReal, vImag, BLOCK_SIZE);
+  FFT.windowing(vReal, BLOCK_SIZE, FFT_WIN_TYP_HAMMING, FFT_FORWARD);
+  FFT.compute(vReal, vImag, BLOCK_SIZE, FFT_FORWARD);
+  FFT.complexToMagnitude(vReal, vImag, BLOCK_SIZE);
   for (int i = 0; i < 8; i++) {
     bands[i] = 0;
   }
